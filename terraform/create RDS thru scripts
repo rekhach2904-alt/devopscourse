@@ -1,0 +1,138 @@
+pipeline {
+    agent any
+
+    parameters {
+        string(
+            name: 'STACK_NAME',
+            defaultValue: 'rds-stack',
+            description: 'CloudFormation Stack Name'
+        )
+
+        string(
+            name: 'TEMPLATE_FILE',
+            defaultValue: '02_rds_cft.yml',
+            description: 'CloudFormation Template File'
+        )
+
+        string(
+            name: 'DB_INSTANCE_IDENTIFIER',
+            defaultValue: "rds-instance-${env.BUILD_NUMBER}",
+            description: 'Unique RDS Instance Identifier'
+        )
+
+        string(
+            name: 'DB_NAME',
+            defaultValue: 'mydb',
+            description: 'Database Name'
+        )
+
+        string(
+            name: 'DB_USERNAME',
+            defaultValue: 'admin',
+            description: 'Master Username'
+        )
+
+        string(
+            name: 'DB_PASSWORD',
+            defaultValue: 'Admin12345!',
+            description: 'Master Password'
+        )
+
+        choice(
+            name: 'REGION',
+            choices: ['us-east-1', 'us-west-1', 'ap-south-1'],
+            description: 'AWS Region'
+        )
+    }
+
+    environment {
+        AWS_DEFAULT_REGION = "${params.REGION}"
+    }
+
+    stages {
+
+        stage('Checkout Repository') {
+            steps {
+                git branch: 'main',
+                    url: 'https://github.com/rekhach2904-alt/CloudFormation.git'
+            }
+        }
+
+        stage('Cleanup Old Stack') {
+            steps {
+                sh """
+                aws cloudformation delete-stack \
+                  --stack-name ${params.STACK_NAME} \
+                  --region ${params.REGION} || true
+                """
+
+                sh """
+                aws cloudformation wait stack-delete-complete \
+                  --stack-name ${params.STACK_NAME} \
+                  --region ${params.REGION} || true
+                """
+            }
+        }
+
+        stage('Create RDS Instance') {
+            steps {
+                echo "Creating CloudFormation RDS Stack..."
+
+                sh """
+                aws cloudformation deploy \
+                  --stack-name ${params.STACK_NAME} \
+                  --template-file ${params.TEMPLATE_FILE} \
+                  --region ${params.REGION} \
+                  --parameter-overrides \
+                    DBInstanceIdentifier=${params.DB_INSTANCE_IDENTIFIER} \
+                    DBName=${params.DB_NAME} \
+                    MasterUsername=${params.DB_USERNAME} \
+                    MasterUserPassword=${params.DB_PASSWORD}
+                """
+            }
+        }
+
+        stage('Verify RDS Instance') {
+            steps {
+                echo "Checking RDS instance status..."
+                sh """
+                aws rds describe-db-instances \
+                  --db-instance-identifier ${params.DB_INSTANCE_IDENTIFIER} \
+                  --region ${params.REGION}
+                """
+            }
+        }
+
+        stage('Delete Stack') {
+            steps {
+                echo "Deleting CloudFormation RDS Stack..."
+
+                sh """
+                aws cloudformation delete-stack \
+                  --stack-name ${params.STACK_NAME} \
+                  --region ${params.REGION}
+                """
+
+                sh """
+                aws cloudformation wait stack-delete-complete \
+                  --stack-name ${params.STACK_NAME} \
+                  --region ${params.REGION}
+                """
+            }
+        }
+    }
+
+    post {
+        success {
+            echo 'RDS instance created, verified, and deleted successfully.'
+        }
+
+        failure {
+            echo 'Pipeline failed.'
+        }
+
+        always {
+            echo 'Pipeline execution completed.'
+        }
+    }
+}
